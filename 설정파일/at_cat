@@ -1,0 +1,6 @@
+#!/system/bin/sh
+# 사용법: at_cat"
+
+echo "cat ~/../dev/ttyUSB0"
+
+cat ~/../dev/ttyUSB0

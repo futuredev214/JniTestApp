@@ -24,7 +24,7 @@ void ba2strMac(const bdaddr_t *ba, char *str) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_kr_co_mirerotack_btsever1_MainActivity_00024NativeBtServer_startBluetoothServer(JNIEnv *env, jobject thiz) {
+Java_kr_co_mirerotack_jniTest_MainActivity_00024NativeBtServer_startBluetoothServer(JNIEnv *env, jobject thiz) {
     int sockfd, client;
     struct sockaddr_rc loc_addr = {0}, rem_addr = {0};
     char buf[1024] = {0};
@@ -45,7 +45,7 @@ Java_kr_co_mirerotack_btsever1_MainActivity_00024NativeBtServer_startBluetoothSe
     bdaddr_t any = {{0, 0, 0, 0, 0, 0}};
     loc_addr.rc_bdaddr = any;
 
-    loc_addr.rc_channel = (uint8_t)1;
+    loc_addr.rc_channel = (uint8_t)27;
 
     // 3. 바인드
     if (bind(sockfd, (struct sockaddr *)&loc_addr, sizeof(loc_addr)) < 0) {
@@ -80,9 +80,13 @@ Java_kr_co_mirerotack_btsever1_MainActivity_00024NativeBtServer_startBluetoothSe
     LOGI("클라이언트 연결됨: %s", addr);
 
     // 6. 예시 메시지 수신
-    int bytes_read = read(client, buf, sizeof(buf));
-    if (bytes_read > 0) {
-        LOGI("수신된 메시지: %s", buf);
+    LOGE("메세지 수신 대기");
+
+    while (true) {
+        int bytes_read = read(client, buf, sizeof(buf));
+        if (bytes_read > 0) {
+            LOGI("수신된 메시지: %s", buf);
+        }
     }
 
     close(client);

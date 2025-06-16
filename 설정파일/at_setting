@@ -1,0 +1,10 @@
+#!/system/bin/sh
+# 사용법: at_setting"
+
+echo "stty -F ~/../dev/ttyUSB0 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts"
+echo "stty -F ~/../dev/ttyUSB0"
+echo "ls -al ~/../dev/ttyUSB0"
+
+stty -F ~/../dev/ttyUSB0 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts
+stty -F ~/../dev/ttyUSB0
+ls -al ~/../dev/ttyUSB0

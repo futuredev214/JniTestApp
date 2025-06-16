@@ -1,0 +1,5 @@
+#!/system/bin/sh
+
+# 사용법: atcmd "+BTMOD?"
+
+echo -ne "AT$1\r" > ~/../dev/ttyUSB0

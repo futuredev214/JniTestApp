@@ -1,0 +1,65 @@
+#!/system/bin/sh
+#
+# at  ── Bluetooth-to-Serial 유틸리티 (Android BusyBox 셸 전용)
+# ──────────────────────────────────────────────────────────────
+#  사용법:
+#    at cat                    : 장치로부터 수신 텍스트 지속 출력
+#    at set                    : 포트 속도·모드 초기화 + 확인
+#    at cmd "AT+BTMOD?"        : AT 문자열 전송 (끝에 \r 자동 부착)
+#
+#  참고: PORT 변수만 바꿔 주면 다른 tty 도 사용 가능
+
+PORT="/dev/ttyUSB0"   # 실제 시리얼 포트 경로
+
+# ──── 보조 함수 ────────────────────────────────────────────────
+#  문자열 끝에 이미 \r 또는 \r\n 표기가 있다면 제거 후 \r 붙임
+append_cr() {
+    local RAW="$*"
+
+    RAW="${RAW%\\r\\n}"
+    RAW="${RAW%\\r}"
+    RAW="${RAW%\\n}"
+
+    echo " DEBUG > 최종 전송 문자열: [$RAW\r]" >&2
+    echo -ne "$RAW\r"
+}
+
+# ──── 메인 분기 ────────────────────────────────────────────────
+case "$1" in
+    cat)
+        echo "> cat $PORT"
+        shift
+        cat "$PORT"
+        ;;
+
+    set)
+        echo "> stty -F $PORT 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts"
+        echo "> stty -F $PORT"
+        echo "> ls -al $PORT"
+
+        stty -F "$PORT" 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts
+        stty -F "$PORT"
+        ls -al "$PORT"
+        ;;
+
+    cmd)
+        shift
+        if [ -z "$1" ]; then
+            echo "사용법: at cmd \"AT명령\""
+            exit 1
+        fi
+
+        # 모든 남은 인자를 하나의 문자열로 합침
+        AT_STRING="$*"
+        # \r 자동 처리
+        FINAL=$(append_cr "$AT_STRING")
+
+        echo "> echo -ne \"$FINAL\" > $PORT"
+        echo -ne "$FINAL" > "$PORT"
+        ;;
+
+    *)
+        echo "사용법: $0 {cat|setting|cmd \"AT명령\"}"
+        exit 1
+        ;;
+esac
