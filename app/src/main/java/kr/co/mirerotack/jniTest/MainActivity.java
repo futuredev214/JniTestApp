@@ -37,10 +37,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "UartLog";           // 로그 태그 (Log tag)
+    private Boolean isConnected = false;
     private static final int BAUD_RATE = 115200;                      // Parani-SD1000 보드레이트
     private static final int DATA_BIT = 8;                            // Parani-SD1000 기본 데이터 비트 (Default data bit)
     private static final int READ_TIMEOUT = 1000;                     // 읽기 타임아웃 (Read timeout)
@@ -92,6 +96,8 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
     private UsbService usbService;
     private UsbManager usbManager;
 
@@ -129,15 +135,17 @@ public class MainActivity extends AppCompatActivity {
         sendButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                String data = "";
-                if (!editText.getText().toString().equals("")) {
-                    data = editText.getText().toString();
-                } else {
-                    data = "send data";
-                }
-                if (usbService != null) { // if UsbService was correctly binded, Send data
-                    usbService.write(data.getBytes());
-                }
+                isConnected = false;
+
+//                String data = "";
+//                if (!editText.getText().toString().equals("")) {
+//                    data = editText.getText().toString();
+//                } else {
+//                    data = "send data";
+//                }
+//                if (usbService != null) { // if UsbService was correctly binded, Send data
+//                    usbService.write(data.getBytes());
+//                }
             }
         });
 
@@ -152,7 +160,47 @@ public class MainActivity extends AppCompatActivity {
     public void onResume() {
         super.onResume();
         setFilters();  // Start listening notifications from UsbService
+
+        // 스트림이 초기화 되지 않은 경우, 스트림 초기화
+        if (inputStream == null || outputStream == null) {
+            try {
+                initStream();
+            } catch (IOException e) {
+                Log.e(TAG, "스트림 초기화 실패");
+                throw new RuntimeException(e);
+            }
+        }
+
         try {
+            scheduler.scheduleWithFixedDelay(new Runnable() {
+                @Override
+                public void run() {
+                    if (isConnected) {
+                        Log.d(TAG, "이미 연결됨");
+                        return;
+                    }
+
+                    if (checkBluetoothConnected()) {
+                        try {
+                            Log.d(TAG, "1-1. [TX] : C");
+                            String message = "C\r";
+                            outputStream.write(message.getBytes("UTF-8"));
+                            outputStream.flush();
+
+                            isConnected = true;
+                            Log.d(TAG, "클라이언트에 READY 전송");
+                        } catch (IOException e) {
+                            Log.e(TAG, "송신 실패", e);
+                        }
+                    } else {
+                        isConnected = false;
+                    }
+
+                    // sendAtCommand("ATO");
+                    // waitForSecond(1);
+                }
+            }, 0, 2, TimeUnit.SECONDS);  // 2초마다 체크
+
             usbConnect();
         } catch (FileNotFoundException e) {
             Log.e(TAG, "FileNotFoundException");
@@ -177,21 +225,18 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * 스트림이 초기화 되지 않은 경우, 스트림 초기화
+     * in-out 스트림 객체 초기화
      * @throws IOException
      */
     private void initStream() throws IOException {
-        if (inputStream != null && outputStream != null) {
-            Log.w(TAG, "이미 in-out 스트림이 초기화 되어 있습니다.");
-            return;
-        }
+        Runtime.getRuntime().exec(new String[]{"ssu", "-c", "chmod 666 /dev/ttyUSB0"});
+        waitForSecond(1);
 
-        Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 666 /dev/ttyUSB0"});
         File usbDevice = new File("/dev/ttyUSB0");
 
         inputStream = new FileInputStream(usbDevice);
         outputStream = new FileOutputStream(usbDevice);
-        Log.d(TAG, "ttyUSB0 연결 성공 (File 기반 Stream 생성 성공");
+        Log.d(TAG, "ttyUSB0 연결 성공 (File 기반 Stream 생성 성공)");
     }
 
     private void releaseStream() throws IOException {
@@ -212,11 +257,9 @@ public class MainActivity extends AppCompatActivity {
         String TAG = "/dev/ttyUSB0 TX, RX";
 
         try {
-            initStream();
-
             // 명령어 전송
             if (!command.endsWith("\r")) command += "\r";
-            Log.d(TAG, "[TX] " + command.trim());
+            Log.d(TAG, "\n[TX] " + command.trim());
             outputStream.write(command.getBytes("UTF-8"));
             outputStream.flush();
 
@@ -226,7 +269,7 @@ public class MainActivity extends AppCompatActivity {
             StringBuilder responseBuilder = new StringBuilder();
             long startTime = System.currentTimeMillis();
 
-            while ((System.currentTimeMillis() - startTime) < 2000) {
+            while ((System.currentTimeMillis() - startTime) < 10_000) {
                 if (inputStream.available() > 0) {
                     len = inputStream.read(buffer);
                     if (len > 0) {
@@ -241,11 +284,13 @@ public class MainActivity extends AppCompatActivity {
             if (!response.isEmpty()) {
                 Log.d(TAG, "[RX] " + response);
             } else {
-                if (command == "ATO") {
+                // == 는 String 객체 주소값 비교여서 equals 써야함.
+                Log.d(TAG, "command : " + command);
+                if (command.equals("ATO\r")) {
                     Log.e(TAG, "[RX] 응답 없음(ATO 먹힘) == OK");
                     return null;
                 } else {
-                    Log.w(TAG, "2초 내에 응답 없음");
+                    Log.w(TAG, "10초 내에 응답 없음");
                     return null;
                 }
             }
@@ -299,36 +344,51 @@ public class MainActivity extends AppCompatActivity {
         IntentFilter filter = new IntentFilter("kr.co.mirerotack.smartrtumobile.USB_PERMISSION");
         getApplicationContext().registerReceiver(usbReceiver, filter);
 
-        initStream();
-        Log.d(TAG, "File 객체 기반 USB 스트림 open 성공");
+        if (checkBluetoothConnected()) {
+            // 클라이언트의 연결이 끊기지 않게 데이터를 1회성으로 전송해야 한다.
+            String message = "Hello from RTU!\r\n";
+            outputStream.write(message.getBytes("UTF-8"));
+            outputStream.flush();
 
+            startReadingThread();
+        }
+        // startReadingThread();
+    }
+
+    public boolean checkBluetoothConnected() {
         Log.d(TAG, "연결 상태 확인을 위한 TX/RX 수행");
 
-        // 1. 먼저 AT 명령어를 통해 호스트가 AT 명령어를 수신할 수 있는 상태인지 체크한다.
-        String result = sendAtCommand("AT");    // AT 명령어를 통해서 현재 호스트와 RTU가 연결된 상태인지 체크
+        // 1. AT 명령어 수신 가능 여부 테스트
+        String result = sendAtCommand("AT");
 
-        // 1-1. 수신할 수 없는 상태인 경우, "+++" 명령을 통해 AT 명령어를 수신할 수 있도록 설정한다.
-        if (result == null) {
-            Log.d(TAG, "온라인 상태에서 명령 대기 상태로 변경 : +++");
-            sendAtCommand("+++");          // +++을 통해서 mode를 변경하지 않고, AT 명령어에 대해 수신이 가능하도록 설정함
-            waitForSecond(2);      // +++ 전후 1초 대기 권장
+        // 1-1. 수신 불가 시, 명령모드 진입 시도
+        if (result == null || !result.contains("OK")) {
+            Log.d(TAG, "온라인 상태에서 명령 대기 상태로 변경: +++");
+            sendAtCommand("+++");
+            waitForSecond(1);  // +++ 전후 대기 필수
         }
 
-        // 2. AT+BTINFO? 명령어를 통해서 현재 Client 장비가 Bluetooth로 연결되어 있는 상태인지 체크한다.
-        // 예시) 0001950E5825,SD1000v2.0.4-0E5825,MODE3,CONNECT,0,0,NoFC
+        // 이미 연결 상태로 표시되어 있으면 재확인 생략
+        if (isConnected) {
+            Log.d(TAG, "이미 연결된 상태로 간주함");
+            return true;
+        }
+
+        // 2. 블루투스 연결 상태 질의
         result = sendAtCommand("AT+BTINFO?");
-
-        // 3. 연결중인 상태 감지 가능 -> 리스너에게 전달
-        if (result.contains("CONNECT")) {
-            Log.d(TAG, "Bluetooth 연결 상태 : ON");
-        } else { // 3-1. 연결 중이 아닌 상태
-            Log.d(TAG, "Bluetooth 연결 상태 : OFF");
+        if (result != null && result.contains("CONNECT")) {
+            Log.d(TAG, "Bluetooth 연결 상태: ON");
+            isConnected = true;
+        } else {
+            Log.d(TAG, "Bluetooth 연결 상태: OFF");
+            isConnected = false;
         }
 
-        // 4. 처리가 완료된 경우 다시 온라인 모드로 변경하기 위해서 ATO 명령어 수행
-        sendAtCommand("ATO");  // +++을 통해서 mode를 변경하지 않고, AT 명령어에 대해 수신이 가능하도록 설정함
+        // 3. 데이터 송수신을 위해 다시 온라인 모드로 전환
+        sendAtCommand("ATO");
+        waitForSecond(1);
 
-        // startReadingThread();
+        return isConnected;
     }
 
     private void startReadingThread() {

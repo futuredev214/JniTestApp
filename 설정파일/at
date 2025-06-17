@@ -4,6 +4,7 @@
 # ──────────────────────────────────────────────────────────────
 #  사용법:
 #    at cat                    : 장치로부터 수신 텍스트 지속 출력
+#    at pin "1111111"          : pinCode 지정 (최대 16자리, 영문 가능)
 #    at set                    : 포트 속도·모드 초기화 + 확인
 #    at cmd "AT+BTMOD?"        : AT 문자열 전송 (끝에 \r 자동 부착)
 #
@@ -11,35 +12,109 @@
 
 PORT="/dev/ttyUSB0"   # 실제 시리얼 포트 경로
 
-# ──── 보조 함수 ────────────────────────────────────────────────
-#  문자열 끝에 이미 \r 또는 \r\n 표기가 있다면 제거 후 \r 붙임
-append_cr() {
-    local RAW="$*"
+read_with_timeout() {
+    TIMEOUT="$1"
+    {
+        cat "$PORT" &
+        CAT_PID=$!
 
-    RAW="${RAW%\\r\\n}"
-    RAW="${RAW%\\r}"
-    RAW="${RAW%\\n}"
-
-    echo " DEBUG > 최종 전송 문자열: [$RAW\r]" >&2
-    echo -ne "$RAW\r"
+        # 제한 시간 후 강제 종료
+        sleep "$TIMEOUT"
+        kill "$CAT_PID" 2>/dev/null
+    }
 }
 
-# ──── 메인 분기 ────────────────────────────────────────────────
 case "$1" in
-    cat)
+    init)
+        at set
+        at on
+        ;;
+    stat)
+        at cmd "AT+BTINFO?"
+        read_with_timeout 2
+        ;;
+
+    save)
+        echo "설정 저장"
+        at cmd "AT&W"
+        read_with_timeout 1
+        ;;
+
+    reset)
+        echo "소프트 리셋"
+        at cmd "ATZ"
+        read_with_timeout 1
+        ;;
+
+
+    on)
+        echo "BTMODE3 및 소프트 리셋"
+        at cmd "AT+BTMODE,3"
+        at reset
+        at stat
+        ;;
+
+    off)
+        echo "BTMODE0 및 소프트 리셋"
+        at cmd "AT+BTMODE,0"
+        at reset
+        at stat
+        ;;
+
+    unpair)
+        echo "블루투스 연결 초기화"
+        at cmd "AT+BTUNPAIR"
+        at stat
+        ;;
+
+    log)
         echo "> cat $PORT"
         shift
         cat "$PORT"
         ;;
 
+    name)
+        # 사용법: at name "Smartrtu"
+        NAME="$2"
+        echo "set name: $NAME"
+        at cmd "AT+BTNAME=\"$NAME\""
+        at reset
+        at stat
+        ;;
+
+    pin)
+        # 사용법 : at pin "1234"
+        PIN_CODE="$1"
+        echo "key setting : $PIN_CODE"
+        echo -ne "AT+BTKEY="$PIN_CODE"\r" > "$PORT"
+        read_with_timeout 1
+        ;;
+
     set)
         echo "> stty -F $PORT 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts"
         echo "> stty -F $PORT"
+        echo "> chmod 666 $PORT"
         echo "> ls -al $PORT"
 
+        # echo가 수신되지 않게 비활성화 및 BoardRate 지정
         stty -F "$PORT" 115200 raw -echo -echoe -echok -echoctl -echoke -crtscts
         stty -F "$PORT"
+
+        # /dev/ttyUSB0에 접근할 수 있도록 crw-rw-rw-로 권한 변경
+        chmod 666 "$PORT"
         ls -al "$PORT"
+
+        # 기존에 돌고 있던 cat 감지후 경고, 종료
+        if ps | grep '[c]at' | grep -v 'logcat' > /dev/null; then
+            echo "⚠️ cat 프로세스가 이미 실행 중입니다. 종료 후 다시 시도하세요."
+            exit 1
+        fi
+
+        # 블루투스 장비 이름 지정 : SmartrtuBT
+        at cmd 'AT+BTNAME="Smartrtu-Serial"'        # 장치 이름 지정 : SmartrtuBT
+        at cmd 'AT+BTKEY="mirero"'                  # pinCode 지정 : mirero
+        at reset
+        at stat
         ;;
 
     cmd)
@@ -49,13 +124,13 @@ case "$1" in
             exit 1
         fi
 
-        # 모든 남은 인자를 하나의 문자열로 합침
         AT_STRING="$*"
-        # \r 자동 처리
-        FINAL=$(append_cr "$AT_STRING")
+        echo -ne "${AT_STRING}\r" > "$PORT" # 실제 전송: echo -ne로 캐리지 리턴 포함 전송
 
-        echo "> echo -ne \"$FINAL\" > $PORT"
-        echo -ne "$FINAL" > "$PORT"
+        echo "명령어 $AT_STRING > $PORT 전송 완료"
+        read_with_timeout 2
+
+        echo -ne "\n"
         ;;
 
     *)
